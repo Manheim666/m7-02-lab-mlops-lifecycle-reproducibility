@@ -1,0 +1,50 @@
+registry:
+  name: northstar-models
+  stages:
+    - name: staging
+      promoted_from: training_run
+      promotion_rule: automatic
+      gates:
+        - "MAE on frozen held-out evaluation set <= 4.2 minutes"
+        - "p95 prediction error <= 9.0 minutes on last 30-day held-out slice"
+        - "per-city MAE <= 6.5 minutes for all cities with >= 200 deliveries in eval period"
+        - "training pipeline exit code 0 with no data quality warnings (null rate <= 0.5% per feature)"
+
+    - name: production
+      promoted_from: staging
+      promotion_rule: manual
+      gates:
+        - "canary rollout: 5% live traffic for 24 h, p95 inference latency <= 150 ms, error rate <= 0.1%"
+        - "per-region MAE <= 5.0 minutes for all regions with >= 500 deliveries/day in canary window"
+        - "no statistically significant increase in mean absolute error vs. current production model (paired t-test p > 0.05 on canary request log)"
+      approvers:
+        - ml-lead
+        - platform-ops
+
+    - name: archived
+      promoted_from: production
+      promotion_rule: automatic
+      trigger: "a newer model version is promoted to production; archived version is retained for rollback for 90 days"
+
+models:
+  - name: eta
+    owner: ml-platform-team
+    sla_p95_ms: 150
+    retrain_cadence: "every 2 weeks (or on drift signal)"
+    retention_versions: 10
+    serving_rps: 200
+
+  - name: dispatcher-routing
+    owner: ml-platform-team
+    sla_p95_ms: 80
+    retrain_cadence: "monthly (or on drift signal)"
+    retention_versions: 10
+    serving_rps: 50
+
+lineage:
+  required_fields:
+    - git_sha           # commit SHA of the training code that produced the model
+    - dataset_hash      # SHA256 of the DVC-versioned Parquet snapshot used for training
+    - python_env_hash   # SHA256 of the pip-compile-generated requirements.lock file
+    - random_seed       # root integer seed passed to numpy, torch, and PYTHONHASHSEED
+    - training_start_timestamp  # ISO-8601 UTC; ties the run to a point-in-time data snapshot
